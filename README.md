@@ -1,13 +1,15 @@
 # routemaster-drain
 
 A Rack-based event receiver for the
-[Routemaster](https://github.com/HouseTrip/routemaster) event bus.
+[Routemaster](https://github.com/mezis/routemaster) event bus.
 
 [![Version](https://badge.fury.io/rb/routemaster-drain.svg)](https://rubygems.org/gems/routemaster-drain)
 &nbsp;
-[![Build](https://travis-ci.org/HouseTrip/routemaster-drain.svg?branch=master)](https://travis-ci.org/HouseTrip/routemaster-drain)
+[![Build](https://travis-ci.org/mezis/routemaster-drain.svg?branch=master)](https://travis-ci.org/mezis/routemaster-drain)
 &nbsp;
-[![Docs](http://img.shields.io/badge/API%20docs-rubydoc.info-blue.svg)](http://rubydoc.info/github/HouseTrip/routemaster-drain/frames/file/README.md)
+[![Code Climate](https://codeclimate.com/github/deliveroo/routemaster-drain/badges/gpa.svg)](https://codeclimate.com/github/deliveroo/routemaster-drain)
+[![Test Coverage](https://codeclimate.com/github/deliveroo/routemaster-drain/badges/coverage.svg)](https://codeclimate.com/github/deliveroo/routemaster-drain/coverage)
+[![Docs](http://img.shields.io/badge/API%20docs-rubydoc.info-blue.svg)](http://rubydoc.info/github/mezis/routemaster-drain/frames/file/README.md)
 
 `routemaster-drain` is a collection of Rack middleware to receive and
 parse Routemaster events, filter them, and preemptively cache the corresponding
@@ -26,6 +28,7 @@ combining middleware.
     - [Simply receive events from Routemaster](#simply-receive-events-from-routemaster)
     - [Receive change notifications without duplicates](#receive-change-notifications-without-duplicates)
     - [Cache data for all notified resources](#cache-data-for-all-notified-resources)
+  - [HTTP Client](#http-client)
   - [Internals](#internals)
     - [Dirty map](#dirty-map)
     - [Filter](#filter)
@@ -211,17 +214,65 @@ Note that `Cache#fget` is a future, so you can efficiently query many resources
 and have any `HTTP GET` requests (and cache queries) happen in parallel.
 
 See
-[rubydoc](http://rubydoc.info/github/HouseTrip/routemaster-drain/Routemaster/Cache)
+[rubydoc](http://rubydoc.info/github/mezis/routemaster-drain/Routemaster/Cache)
 for more details on `Cache`.
+
+## HTTP Client
+The Drain is using a Faraday http client for communication between services. The client
+comes with a convenient caching mechanism as a default and supports custom response materialization.
+The Drain itself has the concept of "HATEOAS"(see below) response that provides a common way of addressing resources.
+
+** **In order for the client to discover the resources that you are interested in, you need to call the `#discover(service_url)`
+method first**
+
+Example:
+
+```ruby
+require 'routemaster/fetcher'
+require 'routemaster/responses/hateoas_response'
+
+client = Routemaster::APIClient.new(response_class: Routemaster::Responses::HateoasResponse)
+
+response = client.discover('https://identity.deliveroo.com.dev')
+session_create_response = response.sessions.create(email: 'test@test.com', password: 'sup3rs3cr3t')
+session_create_response.user.show(1)
+```
+
+### HATEOAS materialisation
+The client comes with optional HATEOAS response capabilities. They are optional, because drain itself doesn't need to use the HATEOAS
+response capabilities. Whenever the client is used outside of the drain it is **strongly** advised to be used with the HATEOAS response capabilities.
+The HATEOAS response will materialize methods based on the keys found under the `_links` key on the payload. The semantics are the following:
+
+
+```ruby
+# Given the following payload
+{
+  "_links" : {
+    "users" : { "href" : "https://identity.deliveroo.com.dev/users" },
+    "user"  : { "href" : "https://identity.deliveroo.com.dev/users/{id}", "templated" : true }
+  }
+}
+
+client = Routemaster::APIClient.new(response_class: Routemaster::Responses::HateoasResponse)
+response = client.discover('https://identity.deliveroo.com.dev')
+
+response.users.create(username: 'roo')
+#=> HateoasResponse
+response.users.index
+#=> HateoasResponse
+response.user.show(1)
+#=> HateoasResponse
+```
+
 
 
 ## Internals
 
 The more elaborate drains are built with two components which can also be used
 independently,
-[`Dirty::Map`](http://rubydoc.info/github/HouseTrip/routemaster-drain/Routemaster/Dirty/Map)
+[`Dirty::Map`](http://rubydoc.info/github/mezis/routemaster-drain/Routemaster/Dirty/Map)
 and
-[`Dirty::Filter`](http://rubydoc.info/github/HouseTrip/routemaster-drain/Routemaster/Dirty/Filter).
+[`Dirty::Filter`](http://rubydoc.info/github/mezis/routemaster-drain/Routemaster/Dirty/Filter).
 
 ### Dirty map
 
@@ -233,22 +284,22 @@ A dirty map map gets _marked_ when an event about en entity gets processed that
 indicates a state change, and _swept_ to process those changes.
 
 Practically, instances of
-[`Routemaster::Dirty::Map`](http://rubydoc.info/github/HouseTrip/routemaster-drain/Routemaster/Dirty/Map)
+[`Routemaster::Dirty::Map`](http://rubydoc.info/github/mezis/routemaster-drain/Routemaster/Dirty/Map)
 will emit a `:dirty_entity` event when a URL is marked as dirty, and can be
 swept when an entity is "cleaned".  If a URL is marked multiple times before
 being swept (e.g. for very volatile entities), the event will only by broadcast
 once.
 
 To sweep the map, you can for instance listen to this event and call
-[`#sweep_one`](http://rubydoc.info/github/HouseTrip/routemaster-drain/Routemaster/Dirty/Map#sweep_one-instance_method).
+[`#sweep_one`](http://rubydoc.info/github/mezis/routemaster-drain/Routemaster/Dirty/Map#sweep_one-instance_method).
 
 If you're not in a hurry and would rather run through batches you can call
-[`#sweep`](http://rubydoc.info/github/HouseTrip/routemaster-drain/Routemaster/Dirty/Map#sweep-instance_method)
+[`#sweep`](http://rubydoc.info/github/mezis/routemaster-drain/Routemaster/Dirty/Map#sweep-instance_method)
 which will yield URLs until it runs out of dirty resources.
 
 ### Filter
 
-[`Routemaster::Dirty::Filter`](http://rubydoc.info/github/HouseTrip/routemaster-drain/Routemaster/Dirty/Filter) is a simple event filter
+[`Routemaster::Dirty::Filter`](http://rubydoc.info/github/mezis/routemaster-drain/Routemaster/Dirty/Filter) is a simple event filter
 that performs reordering. It ignores events older than the latest known
 information on an entity.
 
@@ -259,7 +310,7 @@ as in `Receiver::Filter` for instance.
 
 ## Contributing
 
-1. Fork it ( http://github.com/HouseTrip/routemaster-drain/fork )
+1. Fork it ( http://github.com/mezis/routemaster-drain/fork )
 2. Create your feature branch (`git checkout -b my-new-feature`)
 3. Commit your changes (`git commit -am 'Add some feature'`)
 4. Push to the branch (`git push origin my-new-feature`)
